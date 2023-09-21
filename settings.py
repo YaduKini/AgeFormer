@@ -6,16 +6,9 @@ def parse_settings():
 
     parser.add_argument(
         '--data_dir',
-        default='/home/guests/projects/ukbb/abdominal/nifti',
+        default='/vol/aimspace/projects/ukbb/abdominal/nifti',
         type=str,
         help='path to ukbb dataset'
-    )
-
-    parser.add_argument(
-        '--target_csv',
-        default='/home/guests/projects/ukbb/yadu/age_imaging_filtered_train_val.csv',
-        type=str,
-        help='path to target csv'
     )
 
     parser.add_argument(
@@ -34,7 +27,7 @@ def parse_settings():
 
     parser.add_argument(
         '--batch_size',
-        default=2,
+        default=1,
         type=int,
         help='batch size'
     )
@@ -76,7 +69,7 @@ def parse_settings():
 
     parser.add_argument(
         '--pretrain_path',
-        default='pretrain/resnet_18.pth', # change this to ukbb. move pretrained models to my project folder
+        default='/vol/aimspace/users/kini/yadu/sex_prediction/checkpoints/feb22_agepred_2000_agegroups_with_gradaccum.pth', # change this to ukbb. move pretrained models to my project folder
         type=str,
         help=
         'Path for pretrained model.'
@@ -89,23 +82,10 @@ def parse_settings():
         help='Gpu id lists'
     )
 
-    parser.add_argument(
-        '--model',
-        default='resnet',
-        type=str,
-        help='(resnet | preresnet | wideresnet | resnext | densenet | '
-    )
-
-    parser.add_argument(
-        '--model_depth',
-        default=18,
-        type=int,
-        help='Depth of resnet (10 | 18 | 34 | 50 | 101)'
-    )
 
     parser.add_argument(
         '--phase',
-        default='train',
+        default='test', # change this for training and testing phase appropriately
         type=str,
         help='train phase or test phase'
     )
@@ -123,7 +103,21 @@ def parse_settings():
         help="number of classes"
     )
 
-    args = parser.parse_args()
-    args.save_folder = "./home/guests/yadunandan_kini/yadu/medicalnet/sex_prediction/models/{}_{}".format(args.model, args.model_depth)
+    parser.add_argument(
+        "--grad_accum",
+        default={1:32},
+        type=dict,
+        help="gradient accumulation scheduler"
+    )
+
+    parser.add_argument(
+        '--weight_decay', 
+        default=1e-4,
+        type=float,
+        help='lambda value for regularization'
+    )
+
+
+    args = parser.parse_args("")
 
     return args
