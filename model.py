@@ -5,122 +5,130 @@ from torchvision import models
 import torch
 from settings import parse_settings
 from torchvision.models.video import R3D_18_Weights
-from torchmetrics import Accuracy, AUROC
+from torchmetrics import Accuracy, MeanAbsoluteError
 from pytorch_lightning.loggers.wandb import WandbLogger
 from torchmetrics.classification import BinaryAccuracy
-
+import pandas as pd
+sets = parse_settings()
 
 class Classifier(pl.LightningModule):
-    def __init__(self, sets):
+    def __init__(self, sets, age_prediction=True, sex_prediction=False):
         super(Classifier, self).__init__()
-        #resnet3d = models.video.r3d_18(pretrained=True)
-        #print(resnet3d.parameters)
         self.save_hyperparameters()
-        self.sets = parse_settings()
+        self.test_predictions = []
+        self.test_ground_truth = []
+        self.sets = sets
         self.num_classes = sets.num_classes
-        self.accuracy = Accuracy(task='binary')
-        self.accuracy_fn = BinaryAccuracy()
+        self.sex_prediction = sex_prediction
+        self.age_prediction = age_prediction
+        self.mae = MeanAbsoluteError()
         resnet3d_model = models.video.r3d_18(weights=R3D_18_Weights.DEFAULT)
         resnet3d_model.stem = nn.Sequential(nn.Conv3d(1, 3, 1), resnet3d_model.stem) # or duplicate the input 3 times
         linear_layer_size = list(resnet3d_model.children())[-1].in_features
-        #num_filters = resnet3d_model.fc.in_features
-        #layers = list(resnet3d_model.children())[:-1]
-        #self.resnet3d_model = nn.Sequential(*layers)
         resnet3d_model.fc = nn.Linear(linear_layer_size, 256)
-        print("linear_layer_size: ", linear_layer_size)
+
+        for params in resnet3d_model.parameters():
+            params.requires_grad = True
+
         self.resnet3d_model = resnet3d_model
 
 
-        freeze = False
-        if freeze:
-            self.resnet3d_model.eval()
-            for layer in list(self.resnet3d_model.children())[:-1]:
-                for neuron in layer.parameters():
-                    neuron.requires_grad = False
+        if self.sex_prediction:
+            self.resnet_classifier = nn.Linear(256, self.num_classes)
 
-        #self.resnet_classifier1 = nn.Linear(1024, linear_layer_size)
-        self.resnet_classifier = nn.Linear(256, self.num_classes)        
-        #count = 0
-        #self.resnet3d_model.eval()
-        #for params in self.resnet3d_model.parameters():
-         #   params.requires_grad=False
+        if self.age_prediction:
+            self.resnet_regressor = nn.Linear(256, 1)       
 
-        # for layer in list(self.resnet3d_model.children())[:-1]:
-        #      print("layer children: ", layer.children)
-        #      for neuron in layer.parameters():
-        #         neuron.requires_grad=False
-
-        #print("linear layer size: ", linear_layer_size)
-        #self.l1 = nn.Linear(224*168*363, 2)
-        # linear layer size is 512
-        #self.resnet3d_model.fc = nn.Linear(linear_layer_size, self.num_classes)
-        #self.resnet3d_model.fc = nn.Linear(linear_layer_size, 256)
-
-
-        #self.resnet3d_model = resnet3d_model
-        #for layer in list(self.resnet3d_model.children())[:-1]:
-         #    print("layer children: ", layer.children)
-          #   for neuron in layer.parameters():
-           #      neuron.requires_grad=False
-                #count += 1
-                #print(count)
-                #print(neuron.requires_grad)
-
-        #self.resnet3d_model = resnet3d_model
-
-
-        #for layer in list(self.resnet3d_model.children())[:-1]:
-         #    print("layer children: ", layer.children)
-          #   for neuron in layer.parameters():
-           #     neuron.requires_grad=False
-        
         
     def forward(self, x) -> torch.Tensor:
 
-        #print(x.size())
         result = self.resnet3d_model(x)
-        result = self.resnet_classifier(result)
+        result = self.resnet_regressor(result)
         return result
-        #return torch.relu(self.resnet3d_model(x))
-        #return torch.relu(self.resnet3d_model(x.view(x.size(0), -1)))
+
     
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        #y_hat = self(x) # y_hat is the logits
         y_hat = self.forward(x)
-        #y_hat = y_hat.unsqueeze(-1)
-        # correct loss func
-        loss = F.binary_cross_entropy_with_logits(y_hat, y)
-        
-        self.log("training loss", loss, on_epoch=True, prog_bar=True, logger=True, on_step=False)
-        # accuracy function is wrong?
-        training_accuracy = self.accuracy(y_hat, y)     
-        self.log("training accuracy", training_accuracy, on_epoch=True, prog_bar=True, logger=True, on_step=False)
-        return loss
+        error = self.mae(y_hat, y)
+
+        self.log("training error", error, on_epoch=True, prog_bar=True, logger=True, on_step=False)
+
+        return error
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.sets.learning_rate)
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.sets.learning_rate)
+
+        lr_scheduler = {
+            'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.1, patience=3, verbose=True),
+            'monitor': 'validation error'
+        }
+
+        return [optimizer], [lr_scheduler]
+
     
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        #y = y.unsqueeze(-1)
-        #y_hat = self(x) # y_hat is the logits
         y_hat = self.forward(x)
-        #y_hat = y_hat.unsqueeze(-1)
-        loss = F.binary_cross_entropy_with_logits(y_hat, y)
-        self.log("validation loss", loss, on_epoch=True, prog_bar=True, logger=True, on_step=False)
-        validation_accuracy = self.accuracy(y_hat, y)
-        self.log("validation accuracy", validation_accuracy, on_epoch=True, prog_bar=True, logger=True, on_step=False)
-        return loss
+        error = self.mae(y_hat, y)
+        self.log("validation error", error, on_epoch=True, prog_bar=True, logger=True, on_step=False)
+
+        return error
+    
+
+    def on_train_epoch_end(self):
+
+
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+
+        self.logger.log_hyperparams({'current_lr': current_lr})
+        return super().on_train_epoch_end()
+    
+
+    def on_validation_epoch_end(self):
+
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+
+        self.logger.log_hyperparams({'current_lr': current_lr})
+        return super().on_validation_epoch_end()
     
 
     def test_step(self, batch, batch_idx):
         x, y = batch
-        #y_hat = self(x)
         y_hat = self.forward(x)
-        loss = F.binary_cross_entropy_with_logits(y_hat, y)
-        self.log("test loss", loss, on_epoch=True, prog_bar=True, logger=True, on_step=True)
-        test_accuracy = self.accuracy(y_hat, y)
-        self.log("test accuracy", test_accuracy, on_epoch=True, prog_bar=True, logger=True, on_step=True)
-        return loss
+        error = self.mae(y_hat, y)
+        self.log("test error", error, on_epoch=True, prog_bar=True, logger=True, on_step=True)
+        self.log("predicted age", y_hat, on_epoch=True, prog_bar=True, logger=True, on_step=True)
+        
+
+        self.log("ground truth age", y, on_epoch=True, prog_bar=True, logger=True, on_step=True)
+
+        y_hat = y_hat.detach().cpu()
+        y = y.detach().cpu()
+        print("y: ", y)
+        print("y_hat: ", y_hat)
+
+        self.test_predictions.extend(y_hat)
+        self.test_ground_truth.extend(y)
+
+        return error
+
+
+    def on_test_epoch_end(self):
+        predictions = self.trainer.callback_metrics['test_predictions']
+
+        with open('test_predictions.txt', 'w') as f:
+            for pred in predictions:
+                f.write(str(pred) + '\n')
+
+
+    def on_test_start(self):
+        self.test_predictions = []
+
+    def on_test_batch_end(self, outputs, batch, batch_idx):
+        x, y = batch
+        self.test_predictions.extend(outputs.tolist())
+        self.test_ground_truth.extend(y.tolist())
+
